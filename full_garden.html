@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kami‑no‑Niwa Community Garden – Full Version</title>
+  <!--
+    This page implements a more complete version of the community garden
+    inspired by the Plants vs. Zombies Zen Garden.  It features a fixed
+    greenhouse background, a grid of 32 stands, five different plant
+    species with three growth stages each, a communal inventory of
+    consumable items (water, fertilizer, bug spray, music player and
+    seeds) and a simple event system.  Items can be dragged from the
+    shop and dropped onto plants to apply effects.  Seeds must be
+    dragged onto empty stands to plant flowers.  All data is stored
+    locally for demonstration purposes; replace the state management
+    functions with calls to your backend (PostgreSQL via Express) to
+    persist and synchronise the garden across Discord.
+
+    The garden layout and care mechanics are based on descriptions of
+    the Zen Garden in Plants vs. Zombies, where players water and
+    fertilise plants in a 32‑space garden to keep them alive and happy;
+    bug spray and music can improve their mood, and neglected plants
+    will die over time【545221548501015†screenshot】.  Each plant goes through
+    growth stages and periodically drops coins when happy【560610314994064†screenshot】.
+  -->
+  <style>
+    /* Basic reset and layout */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: "Trebuchet MS", Helvetica, Arial, sans-serif;
+      background: #f6f9fc;
+      overflow: hidden;
+      color: #333;
+    }
+
+    /* Top bar shop showing items and counts */
+    #shop-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 56px;
+      background: rgba(255,255,255,0.9);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+      border-bottom: 1px solid #d7c9a5;
+    }
+    .shop-item {
+      margin: 0 14px;
+      display: flex;
+      align-items: center;
+      cursor: grab;
+      user-select: none;
+    }
+    .shop-item img {
+      width: 32px;
+      height: 32px;
+      margin-right: 6px;
+    }
+    .shop-item span.count {
+      font-weight: bold;
+    }
+
+    /* Wrapper containing the greenhouse background */
+    #garden-container {
+      position: absolute;
+      top: 56px; /* below the shop bar */
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image: url('assets/background.png');
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    /* Grid overlay for stands now uses absolute positioning.  Each
+       stand is positioned manually to align with the bamboo platforms
+       visible in the greenhouse image.  The container is relative so
+       absolute children can be placed using percentage offsets. */
+    #garden-grid {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    .stand {
+      position: absolute;
+      /* The slots are transparent overlays on top of the bamboo platforms
+         visible in the background.  No background image is set here so
+         the underlying greenhouse art remains visible. */
+      background-color: transparent;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.2s;
+      /* width and height are set dynamically in JavaScript based on the row */
+    }
+    .stand.drag-over {
+      outline: 2px dashed #79b24d;
+    }
+    .stand.dead {
+      opacity: 0.3;
+    }
+    .plant-image {
+      width: 80%;
+      height: 80%;
+      pointer-events: none;
+    }
+    .pest-indicator::after {
+      content: '\1F41B'; /* 🐛 */
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      font-size: 20px;
+    }
+    .dry-indicator::after {
+      content: '\1F4A6'; /* 💦 */
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      font-size: 20px;
+    }
+
+    /* Modal overlay for planting and details */
+    #modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.5);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+    }
+    #modal {
+      background: #ffffff;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+      max-width: 320px;
+    }
+    #modal h2 {
+      margin-top: 0;
+    }
+    #modal button {
+      margin-top: 8px;
+      padding: 6px 12px;
+      border: none;
+      background: #8fc657;
+      color: #fff;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    #modal button:hover {
+      background: #79b24d;
+    }
+    #modal .species-list {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    #modal .species-item {
+      margin: 4px;
+      cursor: pointer;
+      text-align: center;
+    }
+    #modal .species-item img {
+      width: 48px;
+      height: 48px;
+    }
+
+    /* Event banner at the bottom */
+    #event-banner {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0,0,0,0.8);
+      color: #fff;
+      text-align: center;
+      padding: 6px;
+      font-size: 0.9rem;
+      display: none;
+      z-index: 150;
+    }
+  </style>
+</head>
+<body>
+  <!-- Shop bar with draggable items -->
+  <div id="shop-bar">
+    <div class="shop-item" draggable="true" data-item="seed">
+      <img src="assets/icons/seed.png" alt="Seed">
+      <span class="count" id="seed-count">5</span>
+    </div>
+    <div class="shop-item" draggable="true" data-item="water">
+      <img src="assets/icons/water.png" alt="Water">
+      <span class="count" id="water-count">10</span>
+    </div>
+    <div class="shop-item" draggable="true" data-item="fertilizer">
+      <img src="assets/icons/fertilizer.png" alt="Fertilizer">
+      <span class="count" id="fertilizer-count">8</span>
+    </div>
+    <div class="shop-item" draggable="true" data-item="bugSpray">
+      <img src="assets/icons/bugSpray.png" alt="Bug Spray">
+      <span class="count" id="bugSpray-count">5</span>
+    </div>
+    <div class="shop-item" draggable="true" data-item="music">
+      <img src="assets/icons/music.png" alt="Music">
+      <span class="count" id="music-count">2</span>
+    </div>
+  </div>
+
+  <!-- Main garden container with background -->
+  <div id="garden-container">
+    <div id="garden-grid"></div>
+  </div>
+
+  <!-- Modal for planting and plant details -->
+  <div id="modal-overlay">
+    <div id="modal"></div>
+  </div>
+
+  <!-- Event banner displayed when random events occur -->
+  <div id="event-banner"></div>
+
+  <script>
+    // Configuration constants
+    const NUM_ROWS = 4;
+    const NUM_COLS = 8;
+    const NUM_SPOTS = NUM_ROWS * NUM_COLS;
+
+    // Define plant species: names and image paths for three stages
+    const plantSpecies = [
+      {
+        id: 1,
+        name: 'Murakami Flower',
+        images: [
+          'assets/plants/plant1_stage1.png',
+          'assets/plants/plant1_stage2.png',
+          'assets/plants/plant1_stage3.png'
+        ]
+      },
+      {
+        id: 2,
+        name: 'Flower Type 2',
+        images: [
+          'assets/plants/plant2_stage1.png',
+          'assets/plants/plant2_stage2.png',
+          'assets/plants/plant2_stage3.png'
+        ]
+      },
+      {
+        id: 3,
+        name: 'Flower Type 3',
+        images: [
+          'assets/plants/plant3_stage1.png',
+          'assets/plants/plant3_stage2.png',
+          'assets/plants/plant3_stage3.png'
+        ]
+      },
+      {
+        id: 4,
+        name: 'Flower Type 4',
+        images: [
+          'assets/plants/plant4_stage1.png',
+          'assets/plants/plant4_stage2.png',
+          'assets/plants/plant4_stage3.png'
+        ]
+      },
+      {
+        id: 5,
+        name: 'Flower Type 5',
+        images: [
+          'assets/plants/plant5_stage1.png',
+          'assets/plants/plant5_stage2.png',
+          'assets/plants/plant5_stage3.png'
+        ]
+      }
+    ];
+
+    /*
+      Garden state.  Each slot contains an object or null:
+      {
+        species: object from plantSpecies,
+        stage: 0–2 (index into images),
+        needsWater: boolean,
+        pests: boolean,
+        happy: boolean,
+        lastWater: timestamp,
+        lastPests: timestamp,
+        alive: boolean
+      }
+      In the Zen Garden, players must water and fertilise plants to
+      advance their growth; bug spray and music improve happiness.  If
+      plants are neglected they may die【545221548501015†screenshot】.  Our state
+      tracks similar variables and is updated over time.
+    */
+    const garden = Array.from({ length: NUM_SPOTS }, () => null);
+
+    // Communal inventory of items.  These counts can be tied to a
+    // currency system in your Discord bot; here they are simple numbers.
+    const inventory = {
+      seed: 5,
+      water: 10,
+      fertilizer: 8,
+      bugSpray: 5,
+      music: 2
+    };
+
+    // Utility to update inventory counts in the DOM
+    function updateInventoryDisplay() {
+      document.getElementById('seed-count').textContent = inventory.seed;
+      document.getElementById('water-count').textContent = inventory.water;
+      document.getElementById('fertilizer-count').textContent = inventory.fertilizer;
+      document.getElementById('bugSpray-count').textContent = inventory.bugSpray;
+      document.getElementById('music-count').textContent = inventory.music;
+    }
+
+    // Render the garden grid
+    function renderGarden() {
+      const grid = document.getElementById('garden-grid');
+      grid.innerHTML = '';
+      // Define the vertical positions (top) for each row as percentages of
+      // the garden container height.  The values are tuned by eye to
+      // overlay the bamboo platforms in the greenhouse image.  Feel free
+      // to adjust these values if you use a different background.
+      const rowTops = [24, 39, 57, 74]; // tuned to align roughly with the four rows of platforms
+      /*
+        Define per‑row horizontal positions (left) for each of the eight
+        stands.  Because of the perspective in the background, the
+        stands are not evenly spaced: the back row is narrower and the
+        front row is wider.  Each sub‑array contains eight numbers
+        representing the left offsets (in percent) for that row.
+      */
+      const colLeftsByRow = [
+        // Row 1 (back): narrow spacing.  These values approximate the
+        // horizontal centres of the top‑most bamboo platforms.
+        [14, 23, 31, 40, 56, 65, 73, 82],
+        // Row 2: slightly wider
+        [16, 25, 35, 44, 55, 64, 74, 83],
+        // Row 3: wider still
+        [18, 28, 38, 48, 53, 63, 73, 84],
+        // Row 4 (front): widest spacing
+        [21, 32, 44, 54, 59, 69, 79, 89]
+      ];
+      for (let i = 0; i < NUM_SPOTS; i++) {
+        const stand = document.createElement('div');
+        stand.className = 'stand';
+        stand.dataset.index = i;
+        // Compute absolute positioning based on row and column
+        const row = Math.floor(i / 8);
+        const col = i % 8;
+        stand.style.top = rowTops[row] + '%';
+        stand.style.left = colLeftsByRow[row][col] + '%';
+        // Apply row‑specific dimensions to account for perspective; lower
+        // rows have larger stands.  These widths and heights are
+        // percentages of the garden container.
+        const widthByRow = [6, 8, 9, 11];
+        const heightByRow = [12, 14, 16, 18];
+        stand.style.width = widthByRow[row] + '%';
+        stand.style.height = heightByRow[row] + '%';
+        // Add drop listeners
+        stand.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          stand.classList.add('drag-over');
+        });
+        stand.addEventListener('dragleave', () => stand.classList.remove('drag-over'));
+        stand.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const itemType = e.dataTransfer.getData('text/plain');
+          stand.classList.remove('drag-over');
+          handleDrop(i, itemType);
+        });
+        // Click to view details or plant
+        stand.addEventListener('click', () => onStandClick(i));
+        const plant = garden[i];
+        if (plant && plant.alive) {
+          // Apply indicators for pests and dryness
+          let classList = '';
+          if (plant.pests) classList += ' pest-indicator';
+          if (plant.needsWater) classList += ' dry-indicator';
+          stand.className += classList;
+          // Show plant image
+          const img = document.createElement('img');
+          img.className = 'plant-image';
+          img.src = plant.species.images[plant.stage];
+          stand.appendChild(img);
+        } else if (plant && !plant.alive) {
+          stand.classList.add('dead');
+        }
+        grid.appendChild(stand);
+      }
+    }
+
+    // Handle clicking on a stand
+    function onStandClick(index) {
+      const plant = garden[index];
+      if (!plant) {
+        // Empty: suggest dropping a seed
+        showModal('Empty Plot', `<p>Drag a seed from the shop onto this stand to plant a new flower.</p>`);
+        return;
+      }
+      if (!plant.alive) {
+        showModal('Dead Plant', `<p>This plant has died.  You can clear the plot and plant again.</p><button onclick="removePlant(${index})">Remove</button>`);
+        return;
+      }
+      // Show details and allow removal
+      const speciesName = plant.species.name;
+      const stageName = ['Seedling','Growing','Mature'][plant.stage];
+      let html = `<p><strong>${speciesName}</strong> – ${stageName}</p>`;
+      if (plant.needsWater) html += `<p>It needs water!</p>`;
+      if (plant.pests) html += `<p>Pests are attacking! Use bug spray.</p>`;
+      html += `<button onclick="removePlant(${index})">Remove</button>`;
+      showModal('Plant Details', html);
+    }
+
+    // Remove a plant from the garden
+    function removePlant(index) {
+      garden[index] = null;
+      closeModal();
+      renderGarden();
+    }
+
+    // Handle dropping an item onto a stand
+    function handleDrop(index, itemType) {
+      if (!inventory[itemType] || inventory[itemType] <= 0) return;
+      const plant = garden[index];
+      if (itemType === 'seed') {
+        // Plant seeds only on empty spots
+        if (plant) return;
+        openPlantSelection(index);
+      } else {
+        if (!plant || !plant.alive) return;
+        applyItemToPlant(index, itemType);
+      }
+    }
+
+    // Apply non‑seed items to a plant
+    function applyItemToPlant(index, itemType) {
+      const plant = garden[index];
+      if (!plant) return;
+      switch (itemType) {
+        case 'water':
+          plant.needsWater = false;
+          plant.lastWater = Date.now();
+          // Growing: watering increases stage at early stages
+          if (plant.stage < 2) plant.stage++;
+          break;
+        case 'fertilizer':
+          // Fertiliser speeds growth: jump a stage and becomes happy
+          if (plant.stage < 2) plant.stage = Math.min(plant.stage + 2, 2);
+          plant.happy = true;
+          break;
+        case 'bugSpray':
+          plant.pests = false;
+          break;
+        case 'music':
+          plant.happy = true;
+          break;
+        default:
+          return;
+      }
+      inventory[itemType]--;
+      updateInventoryDisplay();
+      renderGarden();
+    }
+
+    // Present a modal to choose a species when planting
+    function openPlantSelection(index) {
+      let content = '<p>Select a flower to plant:</p><div class="species-list">';
+      plantSpecies.forEach((spec, i) => {
+        content += `<div class="species-item" onclick="plantSeed(${index},${i})">` +
+                   `<img src="${spec.images[0]}" alt="${spec.name}"><br>${spec.name}</div>`;
+      });
+      content += '</div>';
+      showModal('Plant Seeds', content);
+    }
+
+    // Actually plant a seed of the chosen species
+    function plantSeed(index, speciesIndex) {
+      if (inventory.seed <= 0) return;
+      const spec = plantSpecies[speciesIndex];
+      garden[index] = {
+        species: spec,
+        stage: 0,
+        needsWater: false,
+        pests: false,
+        happy: false,
+        lastWater: Date.now(),
+        lastPests: null,
+        alive: true
+      };
+      inventory.seed--;
+      updateInventoryDisplay();
+      closeModal();
+      renderGarden();
+    }
+
+    // Drag and drop setup for shop items
+    document.querySelectorAll('.shop-item').forEach(item => {
+      item.addEventListener('dragstart', (e) => {
+        const type = item.dataset.item;
+        e.dataTransfer.setData('text/plain', type);
+        // Allow copy effect; we do not move item from shop
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+    });
+
+    // Modal helpers
+    function showModal(title, html) {
+      const overlay = document.getElementById('modal-overlay');
+      const modal = document.getElementById('modal');
+      modal.innerHTML = `<h2>${title}</h2>` + html;
+      overlay.style.display = 'flex';
+    }
+    function closeModal() {
+      document.getElementById('modal-overlay').style.display = 'none';
+    }
+    document.getElementById('modal-overlay').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('modal-overlay')) closeModal();
+    });
+
+    // Event system: random events may make plants dry or pest‑ridden.  If not
+    // taken care of within a time limit, the plant dies.
+    function triggerRandomEvent() {
+      // Only pick events if there are plants
+      const liveIndices = garden
+        .map((p, i) => p && p.alive ? i : -1)
+        .filter(i => i >= 0);
+      if (liveIndices.length === 0) return;
+      const index = liveIndices[Math.floor(Math.random() * liveIndices.length)];
+      const plant = garden[index];
+      // Choose event type: 0 water drought, 1 pests
+      const eventType = Math.random() < 0.5 ? 'drought' : 'pests';
+      if (eventType === 'drought') {
+        plant.needsWater = true;
+        plant.lastWater = Date.now();
+        showEventBanner('A plant is thirsty! Water it before it wilts.');
+      } else {
+        plant.pests = true;
+        plant.lastPests = Date.now();
+        showEventBanner('Pests are attacking a plant! Use bug spray.');
+      }
+      renderGarden();
+    }
+
+    // Periodically check plant statuses and kill neglected plants
+    function checkPlantHealth() {
+      const now = Date.now();
+      for (let i = 0; i < NUM_SPOTS; i++) {
+        const plant = garden[i];
+        if (!plant || !plant.alive) continue;
+        // If a plant needs water for more than 60 seconds it dies
+        if (plant.needsWater && now - plant.lastWater > 60000) {
+          plant.alive = false;
+          showEventBanner('A plant has died from drought.');
+        }
+        // If a plant has pests for more than 60 seconds it dies
+        if (plant.pests && plant.lastPests && now - plant.lastPests > 60000) {
+          plant.alive = false;
+          showEventBanner('A plant has died from pests.');
+        }
+      }
+      renderGarden();
+    }
+
+    // Show a temporary event banner
+    let bannerTimeout;
+    function showEventBanner(message) {
+      const banner = document.getElementById('event-banner');
+      banner.textContent = message;
+      banner.style.display = 'block';
+      clearTimeout(bannerTimeout);
+      bannerTimeout = setTimeout(() => {
+        banner.style.display = 'none';
+      }, 5000);
+    }
+
+    // Main initialisation
+    function init() {
+      updateInventoryDisplay();
+      renderGarden();
+      // Random event every 45–90 seconds
+      setInterval(triggerRandomEvent, 45000 + Math.random() * 45000);
+      // Check plant health every 10 seconds
+      setInterval(checkPlantHealth, 10000);
+    }
+    init();
+  </script>
+</body>
+</html>
