@@ -1,0 +1,7 @@
+{
+  "name": "kami-no-niwa-activity",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Discord Activity frontend (static). Backend lives in the bot repo.",
+  "license": "UNLICENSED"
+}

@@ -73,7 +73,7 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background-image: url('assets/background.png');
+  background-image: url('background.png');
       background-size: cover;
       background-position: center;
       background-repeat: no-repeat;
@@ -205,23 +205,23 @@
   <!-- Shop bar with draggable items -->
   <div id="shop-bar">
     <div class="shop-item" draggable="true" data-item="seed">
-      <img src="assets/icons/seed.png" alt="Seed">
+      <img src="assets/items/seed1.png" alt="Seed">
       <span class="count" id="seed-count">5</span>
     </div>
     <div class="shop-item" draggable="true" data-item="water">
-      <img src="assets/icons/water.png" alt="Water">
+      <img src="assets/items/water.png" alt="Water">
       <span class="count" id="water-count">10</span>
     </div>
     <div class="shop-item" draggable="true" data-item="fertilizer">
-      <img src="assets/icons/fertilizer.png" alt="Fertilizer">
+      <img src="assets/items/fertilizer.png" alt="Fertilizer">
       <span class="count" id="fertilizer-count">8</span>
     </div>
     <div class="shop-item" draggable="true" data-item="bugSpray">
-      <img src="assets/icons/bugSpray.png" alt="Bug Spray">
+      <img src="assets/items/bugSpray.png" alt="Bug Spray">
       <span class="count" id="bugSpray-count">5</span>
     </div>
     <div class="shop-item" draggable="true" data-item="music">
-      <img src="assets/icons/music.png" alt="Music">
+      <img src="assets/items/music.png" alt="Music">
       <span class="count" id="music-count">2</span>
     </div>
   </div>
@@ -243,53 +243,62 @@
     // Configuration constants
     const NUM_ROWS = 4;
     const NUM_COLS = 8;
-    const NUM_SPOTS = NUM_ROWS * NUM_COLS;
+  const NUM_SPOTS = NUM_ROWS * NUM_COLS;
+
+  // Backend integration
+  const _params = new URLSearchParams(location.search);
+  const _apiParam = (_params.get('api') || '').trim();
+  const API_ROOT = _apiParam
+    ? (_apiParam.endsWith('/api') ? _apiParam : _apiParam.replace(/\/+$/, '') + '/api')
+    : '';
+  const GUILD_ID = _params.get('guild') || 'dev-guild';
+  const DEMO_MODE = !API_ROOT;
 
     // Define plant species: names and image paths for three stages
-    const plantSpecies = [
+  let plantSpecies = [
       {
         id: 1,
         name: 'Murakami Flower',
         images: [
-          'assets/plants/plant1_stage1.png',
-          'assets/plants/plant1_stage2.png',
-          'assets/plants/plant1_stage3.png'
+          'assets/flowers/plant1_stage1.png',
+          'assets/flowers/plant1_stage2.png',
+          'assets/flowers/plant1_stage3.png'
         ]
       },
       {
         id: 2,
         name: 'Flower Type 2',
         images: [
-          'assets/plants/plant2_stage1.png',
-          'assets/plants/plant2_stage2.png',
-          'assets/plants/plant2_stage3.png'
+          'assets/flowers/plant2_stage1.png',
+          'assets/flowers/plant2_stage2.png',
+          'assets/flowers/plant2_stage3.png'
         ]
       },
       {
         id: 3,
         name: 'Flower Type 3',
         images: [
-          'assets/plants/plant3_stage1.png',
-          'assets/plants/plant3_stage2.png',
-          'assets/plants/plant3_stage3.png'
+          'assets/flowers/plant3_stage1.png',
+          'assets/flowers/plant3_stage2.png',
+          'assets/flowers/plant3_stage3.png'
         ]
       },
       {
         id: 4,
         name: 'Flower Type 4',
         images: [
-          'assets/plants/plant4_stage1.png',
-          'assets/plants/plant4_stage2.png',
-          'assets/plants/plant4_stage3.png'
+          'assets/flowers/plant4_stage1.png',
+          'assets/flowers/plant4_stage2.png',
+          'assets/flowers/plant4_stage3.png'
         ]
       },
       {
         id: 5,
         name: 'Flower Type 5',
         images: [
-          'assets/plants/plant5_stage1.png',
-          'assets/plants/plant5_stage2.png',
-          'assets/plants/plant5_stage3.png'
+          'assets/flowers/plant5_stage1.png',
+          'assets/flowers/plant5_stage2.png',
+          'assets/flowers/plant5_stage3.png'
         ]
       }
     ];
@@ -313,15 +322,20 @@
     */
     const garden = Array.from({ length: NUM_SPOTS }, () => null);
 
-    // Communal inventory of items.  These counts can be tied to a
-    // currency system in your Discord bot; here they are simple numbers.
-    const inventory = {
-      seed: 5,
-      water: 10,
-      fertilizer: 8,
-      bugSpray: 5,
-      music: 2
-    };
+    // Communal inventory of items. In demo mode, use local defaults.
+    const inventory = DEMO_MODE ? {
+        seed: 5,
+        water: 10,
+        fertilizer: 8,
+        bugSpray: 5,
+        music: 2
+      } : {
+        seed: 0,
+        water: 0,
+        fertilizer: 0,
+        bugSpray: 0,
+        music: 0
+      };
 
     // Utility to update inventory counts in the DOM
     function updateInventoryDisplay() {
@@ -477,6 +491,14 @@
           return;
       }
       inventory[itemType]--;
+      // Persist to backend (best-effort)
+      if (!DEMO_MODE) {
+        fetch(`${API_ROOT}/garden/${encodeURIComponent(GUILD_ID)}/action`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slot_index: index, action: itemType })
+        }).then(() => loadState()).catch(() => {});
+      }
       updateInventoryDisplay();
       renderGarden();
     }
@@ -508,6 +530,14 @@
       };
       inventory.seed--;
       updateInventoryDisplay();
+      // Persist to backend (best-effort)
+      if (!DEMO_MODE) {
+        fetch(`${API_ROOT}/garden/${encodeURIComponent(GUILD_ID)}/plant`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slot_index: index, species_id: spec.id })
+        }).then(() => loadState()).catch(() => {});
+      }
       closeModal();
       renderGarden();
     }
@@ -592,10 +622,60 @@
       }, 5000);
     }
 
+    // Load state from backend and then init timers
+    async function loadState() {
+        if (DEMO_MODE) {
+          updateInventoryDisplay();
+          renderGarden();
+          return;
+        }
+        try {
+          const res = await fetch(`${API_ROOT}/garden/${encodeURIComponent(GUILD_ID)}`);
+        if (!res.ok) throw new Error('Failed to load state');
+        const data = await res.json();
+        if (Array.isArray(data.species) && data.species.length) {
+          plantSpecies = data.species.map(s => ({
+            id: s.id,
+            name: s.name,
+            images: [
+                `assets/flowers/plant${s.id}_stage1.png`,
+                `assets/flowers/plant${s.id}_stage2.png`,
+                `assets/flowers/plant${s.id}_stage3.png`
+            ]
+          }));
+        }
+  inventory.seed = data.inventory?.seed ?? 0;
+  inventory.water = data.inventory?.water ?? 0;
+        inventory.fertilizer = data.inventory?.fertilizer ?? 0;
+        inventory.bugSpray = data.inventory?.bugSpray ?? 0;
+        inventory.music = data.inventory?.music ?? 0;
+        for (let i = 0; i < NUM_SPOTS; i++) {
+          const slot = data.slots[i];
+          if (!slot || !slot.plant) { garden[i] = null; continue; }
+          const p = slot.plant;
+          const spec = plantSpecies.find(ps => ps.id === p.species_id) || plantSpecies[0];
+          garden[i] = {
+            species: spec,
+            stage: Math.max(0, (p.stage ?? 1) - 1),
+            needsWater: false,
+            pests: false,
+            happy: false,
+            lastWater: p.last_watered ? new Date(p.last_watered).getTime() : Date.now(),
+            lastPests: null,
+            alive: !p.is_dead
+          };
+        }
+      } catch (e) {
+        // Fallback to local defaults
+      } finally {
+        updateInventoryDisplay();
+        renderGarden();
+      }
+    }
+
     // Main initialisation
     function init() {
-      updateInventoryDisplay();
-      renderGarden();
+      loadState();
       // Random event every 45–90 seconds
       setInterval(triggerRandomEvent, 45000 + Math.random() * 45000);
       // Check plant health every 10 seconds
